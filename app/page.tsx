@@ -79,8 +79,10 @@ export default function Home() {
     const anchor = document.createElement("a");
     anchor.href = url;
     anchor.download = `leadiq-${filter.toLowerCase()}-leads.csv`;
+    document.body.appendChild(anchor);
     anchor.click();
-    URL.revokeObjectURL(url);
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
   }
 
   function addLead(event: FormEvent<HTMLFormElement>) {
