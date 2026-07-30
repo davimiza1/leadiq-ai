@@ -75,14 +75,12 @@ export default function Home() {
     const header = ["Name", "Email", "Score", "Temperature", "Budget", "Timeline", "Source", "Status"];
     const rows = visibleLeads.map((lead) => [lead.name, lead.email, lead.score, lead.temperature, lead.budget, lead.timeline, lead.source, lead.status]);
     const csv = [header, ...rows].map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(",")).join("\n");
-    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
     const anchor = document.createElement("a");
-    anchor.href = url;
+    anchor.href = `data:text/csv;charset=utf-8,${encodeURIComponent(csv)}`;
     anchor.download = `leadiq-${filter.toLowerCase()}-leads.csv`;
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
   }
 
   function addLead(event: FormEvent<HTMLFormElement>) {
