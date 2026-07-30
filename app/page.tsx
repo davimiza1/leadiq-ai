@@ -135,7 +135,7 @@ export default function Home() {
           <div className="top-actions"><button className="icon-button" aria-label="Notifications" aria-expanded={showNotifications} onClick={() => setShowNotifications((current) => !current)}>♢<span /></button><button className="primary-button" onClick={() => setShowForm(true)}>＋ Qualify new lead</button></div>
         </header>
 
-        {showNotifications && <section className="notification-panel" aria-label="Notifications panel"><strong>Notifications</strong><p>2 hot leads are ready for immediate follow-up.</p><p>Your AI scoring engine is online and up to date.</p></section>}
+        {showNotifications && <section className="notification-panel" aria-label="Notifications panel"><div className="notification-head"><strong>Notifications</strong><button aria-label="Close notifications" onClick={() => setShowNotifications(false)}>×</button></div><p>2 hot leads are ready for immediate follow-up.</p><p>Your AI scoring engine is online and up to date.</p></section>}
 
         {activeView !== "overview" && activeView !== "leads" && <section className="workspace-panel" aria-live="polite">
           <p className="eyebrow">WORKSPACE VIEW</p><h2>{viewCopy[activeView].title}</h2><p>{viewCopy[activeView].description}</p>

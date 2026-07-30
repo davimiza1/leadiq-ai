@@ -4,7 +4,7 @@ LeadIQ AI is an interactive real-estate lead qualification dashboard. It scores 
 
 ## Live demo
 
-[Open the deployed LeadIQ AI dashboard](https://leadiq-ai-xtiz-9nxbf7ssw-md-automation.vercel.app)
+[Open the deployed LeadIQ AI dashboard](https://leadiq-ai-xtiz-pearl.vercel.app)
 
 ## Features
 
@@ -27,7 +27,7 @@ LeadIQ AI is an interactive real-estate lead qualification dashboard. It scores 
 | Sources | Shows the active lead count for every acquisition source |
 | Analytics | Shows average score, urgent leads, and qualification rate |
 | Settings | Shows scoring and workspace administrator configuration |
-| Notifications | Opens and closes the notification panel |
+| Notifications | Opens the pipeline notification panel; its close button dismisses it |
 | Qualify new lead | Opens the qualification form and adds the scored lead |
 | View hot leads / Hot | Filters the table to Hot leads |
 | All / Warm / Cold | Displays leads in the selected qualification category |
