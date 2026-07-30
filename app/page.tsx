@@ -53,6 +53,7 @@ export default function Home() {
   const [activeView, setActiveView] = useState<WorkspaceView>("overview");
   const [showNotifications, setShowNotifications] = useState(false);
   const [followUpCreated, setFollowUpCreated] = useState(false);
+  const [exportUrl, setExportUrl] = useState("");
 
   const visibleLeads = useMemo(() => leads.filter((lead) => {
     const matchesFilter = filter === "All" || lead.temperature === filter;
@@ -75,12 +76,7 @@ export default function Home() {
     const header = ["Name", "Email", "Score", "Temperature", "Budget", "Timeline", "Source", "Status"];
     const rows = visibleLeads.map((lead) => [lead.name, lead.email, lead.score, lead.temperature, lead.budget, lead.timeline, lead.source, lead.status]);
     const csv = [header, ...rows].map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(",")).join("\n");
-    const anchor = document.createElement("a");
-    anchor.href = `data:text/csv;charset=utf-8,${encodeURIComponent(csv)}`;
-    anchor.download = `leadiq-${filter.toLowerCase()}-leads.csv`;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
+    setExportUrl(`data:text/csv;charset=utf-8,${encodeURIComponent(csv)}`);
   }
 
   function addLead(event: FormEvent<HTMLFormElement>) {
@@ -161,10 +157,10 @@ export default function Home() {
         <section className="lead-panel">
           <div className="panel-header">
             <div><h2>Lead intelligence</h2><p>AI-ranked opportunities across every acquisition source.</p></div>
-            <div className="panel-tools"><label className="search"><span>⌕</span><input aria-label="Search leads" placeholder="Search leads..." value={query} onChange={(e) => setQuery(e.target.value)} /></label><button className="secondary-button" onClick={exportLeads}>⇩ Export</button></div>
+            <div className="panel-tools"><label className="search"><span>⌕</span><input aria-label="Search leads" placeholder="Search leads..." value={query} onChange={(e) => { setQuery(e.target.value); setExportUrl(""); }} /></label><button className="secondary-button" onClick={exportLeads}>⇩ Export</button>{exportUrl && <a className="download-link" href={exportUrl} download={`leadiq-${filter.toLowerCase()}-leads.csv`}>CSV ready — Download</a>}</div>
           </div>
           <div className="filter-row">
-            {(["All", "Hot", "Warm", "Cold"] as const).map((item) => <button key={item} className={filter === item ? "selected" : ""} onClick={() => setFilter(item)}>{item}{item !== "All" && <span>{leads.filter((lead) => lead.temperature === item).length}</span>}</button>)}
+            {(["All", "Hot", "Warm", "Cold"] as const).map((item) => <button key={item} className={filter === item ? "selected" : ""} onClick={() => { setFilter(item); setExportUrl(""); }}>{item}{item !== "All" && <span>{leads.filter((lead) => lead.temperature === item).length}</span>}</button>)}
             <p><span className="live-dot" />Scoring in real time</p>
           </div>
           <div className="table-wrap">
