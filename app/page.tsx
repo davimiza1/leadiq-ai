@@ -133,7 +133,10 @@ export default function Home() {
     const credentials = { email: String(data.get("email")), password: String(data.get("password")) };
     const result = authMode === "signin"
       ? await supabase.auth.signInWithPassword(credentials)
-      : await supabase.auth.signUp(credentials);
+      : await supabase.auth.signUp({
+          ...credentials,
+          options: { emailRedirectTo: window.location.origin },
+        });
     if (result.error) setAuthMessage(result.error.message);
     else if (authMode === "signup" && !result.data.session) setAuthMessage("Check your email to confirm the account, then sign in.");
     else setAuthMessage("");
