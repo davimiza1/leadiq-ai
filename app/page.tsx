@@ -140,10 +140,14 @@ export default function Home() {
   }
 
   async function signOut() {
-    await supabase?.auth.signOut();
+    if (!supabase) return;
+    setUserId("");
+    setUserEmail("");
     setLeads([]);
     setSelected(null);
     setAuthMessage("");
+    const { error } = await supabase.auth.signOut({ scope: "local" });
+    if (error) setAuthMessage(error.message);
   }
 
   async function addLead(event: FormEvent<HTMLFormElement>) {
