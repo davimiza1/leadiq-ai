@@ -1,6 +1,7 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 
 type Temperature = "Hot" | "Warm" | "Cold";
 type WorkspaceView = "overview" | "leads" | "automations" | "sources" | "analytics" | "settings";
@@ -45,7 +46,7 @@ function scoreLead(budget: number, timeline: string, source: string) {
 }
 
 export default function Home() {
-  const [leads, setLeads] = useState(seedLeads);
+  const [leads, setLeads] = useState<Lead[]>([]);
   const [filter, setFilter] = useState<"All" | Temperature>("All");
   const [query, setQuery] = useState("");
   const [showForm, setShowForm] = useState(false);
@@ -54,6 +55,51 @@ export default function Home() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [followUpCreated, setFollowUpCreated] = useState(false);
   const [exportUrl, setExportUrl] = useState("");
+  const [authReady, setAuthReady] = useState(!isSupabaseConfigured);
+  const [userId, setUserId] = useState("");
+  const [userEmail, setUserEmail] = useState("");
+  const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
+  const [authMessage, setAuthMessage] = useState("");
+  const [savingLead, setSavingLead] = useState(false);
+
+  useEffect(() => {
+    if (!supabase) return;
+
+    supabase.auth.getSession().then(({ data }) => {
+      setUserId(data.session?.user.id ?? "");
+      setUserEmail(data.session?.user.email ?? "");
+      setAuthReady(true);
+    });
+
+    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUserId(session?.user.id ?? "");
+      setUserEmail(session?.user.email ?? "");
+      setAuthReady(true);
+    });
+    return () => data.subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!supabase || !userId) return;
+
+    async function loadLeads() {
+      const { data, error } = await supabase!.from("leads").select("id,name,email,source,budget,timeline,property,location,score,temperature,intent,status,updated").order("created_at", { ascending: false });
+      if (error) {
+        setAuthMessage(error.message);
+        return;
+      }
+      if (data.length > 0) {
+        setLeads(data as Lead[]);
+        return;
+      }
+
+      const starterRows = seedLeads.map((lead) => ({ name: lead.name, email: lead.email, source: lead.source, budget: lead.budget, timeline: lead.timeline, property: lead.property, location: lead.location, score: lead.score, temperature: lead.temperature, intent: lead.intent, status: lead.status, updated: lead.updated, user_id: userId }));
+      const seeded = await supabase!.from("leads").insert(starterRows).select("id,name,email,source,budget,timeline,property,location,score,temperature,intent,status,updated");
+      if (seeded.error) setAuthMessage(seeded.error.message);
+      else setLeads(seeded.data as Lead[]);
+    }
+    loadLeads();
+  }, [userId]);
 
   const visibleLeads = useMemo(() => leads.filter((lead) => {
     const matchesFilter = filter === "All" || lead.temperature === filter;
@@ -61,7 +107,7 @@ export default function Home() {
     return matchesFilter && haystack.includes(query.toLowerCase());
   }), [filter, leads, query]);
 
-  const avgScore = Math.round(leads.reduce((sum, lead) => sum + lead.score, 0) / leads.length);
+  const avgScore = leads.length ? Math.round(leads.reduce((sum, lead) => sum + lead.score, 0) / leads.length) : 0;
   const hotLeads = leads.filter((lead) => lead.temperature === "Hot").length;
   const qualified = leads.filter((lead) => lead.status === "Qualified").length;
 
@@ -79,7 +125,28 @@ export default function Home() {
     setExportUrl(`data:text/csv;charset=utf-8,${encodeURIComponent(csv)}`);
   }
 
-  function addLead(event: FormEvent<HTMLFormElement>) {
+  async function submitAuth(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!supabase) return;
+    setAuthMessage("Connecting securely...");
+    const data = new FormData(event.currentTarget);
+    const credentials = { email: String(data.get("email")), password: String(data.get("password")) };
+    const result = authMode === "signin"
+      ? await supabase.auth.signInWithPassword(credentials)
+      : await supabase.auth.signUp(credentials);
+    if (result.error) setAuthMessage(result.error.message);
+    else if (authMode === "signup" && !result.data.session) setAuthMessage("Check your email to confirm the account, then sign in.");
+    else setAuthMessage("");
+  }
+
+  async function signOut() {
+    await supabase?.auth.signOut();
+    setLeads([]);
+    setSelected(null);
+    setAuthMessage("");
+  }
+
+  async function addLead(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
     const budget = Number(data.get("budget"));
@@ -102,10 +169,24 @@ export default function Home() {
       status: score >= 80 ? "Qualified" : "Nurture",
       updated: "Just now",
     };
-    setLeads((current) => [newLead, ...current]);
-    setSelected(newLead);
+    setSavingLead(true);
+    const result = await supabase!.from("leads").insert({ ...newLead, id: undefined, user_id: userId }).select("id,name,email,source,budget,timeline,property,location,score,temperature,intent,status,updated").single();
+    setSavingLead(false);
+    if (result.error) {
+      setAuthMessage(result.error.message);
+      return;
+    }
+    const savedLead = result.data as Lead;
+    setLeads((current) => [savedLead, ...current]);
+    setSelected(savedLead);
     setShowForm(false);
   }
+
+  if (!isSupabaseConfigured) return <main className="auth-shell"><section className="auth-card"><span className="brand-mark">LQ</span><p className="eyebrow">SETUP REQUIRED</p><h1>Connect Supabase</h1><p>Add <code>NEXT_PUBLIC_SUPABASE_URL</code> and <code>NEXT_PUBLIC_SUPABASE_ANON_KEY</code> to start the secure workspace.</p></section></main>;
+
+  if (!authReady) return <main className="auth-shell"><section className="auth-card"><span className="brand-mark">LQ</span><h1>Loading secure workspace...</h1></section></main>;
+
+  if (!userId) return <main className="auth-shell"><section className="auth-card"><span className="brand-mark">LQ</span><p className="eyebrow">SECURE WORKSPACE</p><h1>{authMode === "signin" ? "Welcome back" : "Create your account"}</h1><p>{authMode === "signin" ? "Sign in to access your private lead pipeline." : "Create a protected LeadIQ AI workspace in seconds."}</p><form onSubmit={submitAuth}><label>Email address<input name="email" type="email" required placeholder="you@example.com" /></label><label>Password<input name="password" type="password" minLength={6} required placeholder="At least 6 characters" /></label><button className="primary-button">{authMode === "signin" ? "Sign in" : "Create account"}</button></form>{authMessage && <div className="auth-message" role="status">{authMessage}</div>}<button className="auth-switch" onClick={() => { setAuthMode(authMode === "signin" ? "signup" : "signin"); setAuthMessage(""); }}>{authMode === "signin" ? "Need an account? Sign up" : "Already registered? Sign in"}</button><small>Recruiter demo credentials will be listed in the project README after setup.</small></section></main>;
 
   return (
     <main className="app-shell">
@@ -122,7 +203,7 @@ export default function Home() {
         <div className="sidebar-spacer" />
         <div className="ai-health"><span className="pulse" /><div><strong>AI engine online</strong><small>Last sync 24 sec ago</small></div></div>
         <button className={`nav-item ${activeView === "settings" ? "active" : ""}`} onClick={() => setActiveView("settings")}><span>⚙</span>Settings</button>
-        <div className="profile"><span className="avatar">MD</span><div><strong>Muhammad Dawood</strong><small>Workspace admin</small></div><span>⋯</span></div>
+        <div className="profile"><span className="avatar">MD</span><div><strong>{userEmail.split("@")[0]}</strong><small>Authenticated workspace</small></div><button className="profile-logout" onClick={signOut}>Sign out</button></div>
       </aside>
 
       <section className="content">
@@ -131,20 +212,20 @@ export default function Home() {
           <div className="top-actions"><button className="icon-button" aria-label="Notifications" aria-expanded={showNotifications} onClick={() => setShowNotifications((current) => !current)}>♢<span /></button><button className="primary-button" onClick={() => setShowForm(true)}>＋ Qualify new lead</button></div>
         </header>
 
-        {showNotifications && <section className="notification-panel" aria-label="Notifications panel"><div className="notification-head"><strong>Notifications</strong><button aria-label="Close notifications" onClick={() => setShowNotifications(false)}>×</button></div><p>2 hot leads are ready for immediate follow-up.</p><p>Your AI scoring engine is online and up to date.</p></section>}
+        {showNotifications && <section className="notification-panel" aria-label="Notifications panel"><div className="notification-head"><strong>Notifications</strong><button aria-label="Close notifications" onClick={() => setShowNotifications(false)}>×</button></div><p>{hotLeads} hot lead(s) are ready for immediate follow-up.</p><p>Your AI scoring engine is online and synced with Supabase.</p></section>}
 
         {activeView !== "overview" && activeView !== "leads" && <section className="workspace-panel" aria-live="polite">
           <p className="eyebrow">WORKSPACE VIEW</p><h2>{viewCopy[activeView].title}</h2><p>{viewCopy[activeView].description}</p>
           {activeView === "automations" && <div className="workspace-grid"><article><strong>Hot lead alert</strong><p>Instant agent notification for scores of 80 or higher.</p><span>Active</span></article><article><strong>Nurture sequence</strong><p>Property recommendations for Warm and Cold prospects.</p><span>Active</span></article></div>}
           {activeView === "sources" && <div className="workspace-grid">{["Website", "Facebook", "Referral", "Google Ads", "LinkedIn"].map((source) => <article key={source}><strong>{source}</strong><p>{leads.filter((lead) => lead.source === source).length} active lead(s)</p></article>)}</div>}
-          {activeView === "analytics" && <div className="workspace-grid"><article><strong>{avgScore}/100</strong><p>Average qualification score</p></article><article><strong>{hotLeads}</strong><p>Leads requiring immediate action</p></article><article><strong>{Math.round((qualified / leads.length) * 100)}%</strong><p>Sales-ready qualification rate</p></article></div>}
+          {activeView === "analytics" && <div className="workspace-grid"><article><strong>{avgScore}/100</strong><p>Average qualification score</p></article><article><strong>{hotLeads}</strong><p>Leads requiring immediate action</p></article><article><strong>{leads.length ? Math.round((qualified / leads.length) * 100) : 0}%</strong><p>Sales-ready qualification rate</p></article></div>}
           {activeView === "settings" && <div className="workspace-grid"><article><strong>Real-time scoring</strong><p>Enabled for every new lead.</p><span>Enabled</span></article><article><strong>Workspace administrator</strong><p>Muhammad Dawood</p></article></div>}
         </section>}
 
         <section className="metric-grid" aria-label="Lead metrics">
           <article className="metric-card highlight"><div className="metric-head"><span className="metric-icon">↗</span><span className="trend">+18.2%</span></div><strong>{leads.length * 47}</strong><p>Total leads analyzed</p><small>vs. previous 30 days</small></article>
           <article className="metric-card"><div className="metric-head"><span className="metric-icon orange">◆</span><span className="trend">+{hotLeads}</span></div><strong>{hotLeads}</strong><p>Hot leads</p><small>Ready for immediate follow-up</small></article>
-          <article className="metric-card"><div className="metric-head"><span className="metric-icon violet">✓</span><span className="trend">+12.4%</span></div><strong>{Math.round((qualified / leads.length) * 100)}%</strong><p>Qualification rate</p><small>{qualified} leads sales-ready</small></article>
+          <article className="metric-card"><div className="metric-head"><span className="metric-icon violet">✓</span><span className="trend">+12.4%</span></div><strong>{leads.length ? Math.round((qualified / leads.length) * 100) : 0}%</strong><p>Qualification rate</p><small>{qualified} leads sales-ready</small></article>
           <article className="metric-card"><div className="metric-head"><span className="metric-icon blue">✦</span><span className="trend neutral">Live</span></div><strong>{avgScore}</strong><p>Average AI score</p><small>Across active lead pipeline</small></article>
         </section>
 
@@ -185,7 +266,7 @@ export default function Home() {
         </section>
       </section>
 
-      {showForm && <div className="modal-backdrop" onMouseDown={() => setShowForm(false)}><section className="modal" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="new-lead-title"><button className="modal-close" onClick={() => setShowForm(false)} aria-label="Close">×</button><span className="modal-kicker">AI QUALIFICATION</span><h2 id="new-lead-title">Analyze a new lead</h2><p>Add the prospect details and LeadIQ will score purchase intent instantly.</p><form onSubmit={addLead}><div className="form-grid"><label>Full name<input name="name" required placeholder="Alex Morgan" /></label><label>Email<input name="email" type="email" required placeholder="alex@example.com" /></label><label>Budget (USD)<input name="budget" type="number" min="50000" required placeholder="450000" /></label><label>Buying timeline<select name="timeline" defaultValue="1-3 months"><option>0-30 days</option><option>1-3 months</option><option>3-6 months</option><option>6+ months</option></select></label><label>Property type<input name="property" required placeholder="2 bedroom apartment" /></label><label>Preferred location<input name="location" required placeholder="Dubai Marina" /></label><label className="full">Lead source<select name="source" defaultValue="Website"><option>Website</option><option>Referral</option><option>Facebook</option><option>Google Ads</option><option>LinkedIn</option></select></label></div><button className="primary-button form-submit">✦ Analyze & qualify lead</button></form></section></div>}
+      {showForm && <div className="modal-backdrop" onMouseDown={() => setShowForm(false)}><section className="modal" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="new-lead-title"><button className="modal-close" onClick={() => setShowForm(false)} aria-label="Close">×</button><span className="modal-kicker">AI QUALIFICATION</span><h2 id="new-lead-title">Analyze a new lead</h2><p>Add the prospect details and LeadIQ will score purchase intent instantly.</p><form onSubmit={addLead}><div className="form-grid"><label>Full name<input name="name" required placeholder="Alex Morgan" /></label><label>Email<input name="email" type="email" required placeholder="alex@example.com" /></label><label>Budget (USD)<input name="budget" type="number" min="50000" required placeholder="450000" /></label><label>Buying timeline<select name="timeline" defaultValue="1-3 months"><option>0-30 days</option><option>1-3 months</option><option>3-6 months</option><option>6+ months</option></select></label><label>Property type<input name="property" required placeholder="2 bedroom apartment" /></label><label>Preferred location<input name="location" required placeholder="Dubai Marina" /></label><label className="full">Lead source<select name="source" defaultValue="Website"><option>Website</option><option>Referral</option><option>Facebook</option><option>Google Ads</option><option>LinkedIn</option></select></label></div><button className="primary-button form-submit" disabled={savingLead}>{savingLead ? "Saving securely..." : "✦ Analyze & qualify lead"}</button></form></section></div>}
 
       {selected && <div className="drawer-backdrop" onMouseDown={() => { setSelected(null); setFollowUpCreated(false); }}><aside className="drawer" onMouseDown={(e) => e.stopPropagation()} aria-label="Lead intelligence details"><button className="modal-close" onClick={() => { setSelected(null); setFollowUpCreated(false); }} aria-label="Close">×</button><p className="eyebrow">AI LEAD PROFILE</p><div className="drawer-person"><span>{selected.name.split(" ").map((n) => n[0]).join("").slice(0, 2)}</span><div><h2>{selected.name}</h2><p>{selected.email}</p></div></div><div className="drawer-score"><div><small>QUALIFICATION SCORE</small><strong>{selected.score}<em>/100</em></strong></div><span className={`temp ${selected.temperature.toLowerCase()}`}>{selected.temperature} lead</span></div><div className="reason-box"><span>✦</span><div><strong>AI recommendation</strong><p>{selected.score >= 80 ? "Contact this lead within 15 minutes and offer a viewing slot. Their budget and timeline show strong purchase readiness." : "Add this prospect to a tailored nurture sequence and follow up with matching property options."}</p></div></div><dl><div><dt>Budget</dt><dd>{money.format(selected.budget)}</dd></div><div><dt>Timeline</dt><dd>{selected.timeline}</dd></div><div><dt>Property</dt><dd>{selected.property}</dd></div><div><dt>Location</dt><dd>{selected.location}</dd></div><div><dt>Source</dt><dd>{selected.source}</dd></div><div><dt>CRM status</dt><dd>{selected.status}</dd></div></dl>{followUpCreated && <div className="follow-up-success" role="status">✓ Personalized follow-up created for {selected.name}.</div>}<button className="primary-button drawer-cta" onClick={() => setFollowUpCreated(true)} disabled={followUpCreated}>{followUpCreated ? "Follow-up ready" : "Create personalized follow-up →"}</button></aside></div>}
     </main>

@@ -6,4 +6,6 @@ interface Fetcher {
   fetch(request: Request): Promise<Response>;
 }
 
-interface D1Database {}
+interface D1Database {
+  readonly _brand?: "D1Database";
+}

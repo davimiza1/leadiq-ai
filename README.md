@@ -15,6 +15,8 @@ LeadIQ AI is an interactive real-estate lead qualification dashboard. It scores 
 - Working workspace views for automations, sources, analytics, and settings
 - Notification panel with actionable pipeline updates
 - CSV export for the currently visible lead results
+- Supabase email/password authentication with protected workspace access
+- Per-user persistent leads secured with Row Level Security
 - Responsive dashboard layout for desktop and mobile screens
 
 ## Verified interactions
@@ -52,6 +54,7 @@ Scores of 80 or more are **Hot**, 60–79 are **Warm**, and scores below 60 are 
 - React 19
 - TypeScript
 - CSS
+- Supabase Auth and PostgreSQL
 - Vinext and Cloudflare tooling for portable deployment support
 - Vercel for the production deployment
 
@@ -62,6 +65,15 @@ npm install
 npm run dev
 ```
 
+Create `.env.local` from `.env.example`, then add the project URL and publishable anon key from Supabase:
+
+```env
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your-publishable-anon-key
+```
+
+Run [`supabase/migrations/202607310001_create_leads.sql`](supabase/migrations/202607310001_create_leads.sql) in the Supabase SQL editor. The migration creates the leads table, enables Row Level Security, and restricts every record to its authenticated owner.
+
 For a Vercel-compatible production check:
 
 ```bash
@@ -70,8 +82,7 @@ npx next build
 
 ## Future improvements
 
-- Persist leads in Supabase
-- Add authenticated team workspaces
+- Add multi-user team workspaces and role invitations
 - Replace the local scoring function with an AI API
 - Send qualified leads and follow-ups to GoHighLevel through webhooks
 
