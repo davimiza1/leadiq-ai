@@ -6,6 +6,13 @@ LeadIQ AI is an interactive real-estate lead qualification dashboard. It scores 
 
 [Open the deployed LeadIQ AI dashboard](https://leadiq-ai-xtiz-pearl.vercel.app)
 
+Recruiter demo account:
+
+- Email: `demo@leadiq.ai`
+- Password: `LeadIQDemo2026!`
+
+The demo workspace uses a confirmed Supabase account. Leads added through it are stored in PostgreSQL and remain available after signing out and signing back in.
+
 ## Features
 
 - Deterministic AI-style lead scoring with Hot, Warm, and Cold categories
