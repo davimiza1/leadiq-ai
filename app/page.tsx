@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 
 type Temperature = "Hot" | "Warm" | "Cold";
@@ -21,6 +21,11 @@ type Lead = {
   status: string;
   updated: string;
 };
+
+type LeadInsert = Omit<Lead, "id">;
+
+const csvColumns = ["name", "email", "budget", "timeline", "property", "location", "source"] as const;
+const allowedTimelines = new Set(["0-30 days", "1-3 months", "3-6 months", "6+ months"]);
 
 const seedLeads: Lead[] = [
   { id: 1, name: "Olivia Martin", email: "olivia@example.com", source: "Website", budget: 850000, timeline: "0-30 days", property: "Luxury villa", location: "Palm Jumeirah", score: 94, temperature: "Hot", intent: "Ready to book a viewing", status: "Qualified", updated: "2 min ago" },
@@ -45,6 +50,37 @@ function scoreLead(budget: number, timeline: string, source: string) {
   return Math.min(98, budgetPoints + timelinePoints + sourcePoints + 6);
 }
 
+function parseCsv(text: string) {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let quoted = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (character === '"' && quoted && text[index + 1] === '"') {
+      cell += '"';
+      index += 1;
+    } else if (character === '"') {
+      quoted = !quoted;
+    } else if (character === "," && !quoted) {
+      row.push(cell.trim());
+      cell = "";
+    } else if ((character === "\n" || character === "\r") && !quoted) {
+      if (character === "\r" && text[index + 1] === "\n") index += 1;
+      row.push(cell.trim());
+      if (row.some(Boolean)) rows.push(row);
+      row = [];
+      cell = "";
+    } else {
+      cell += character;
+    }
+  }
+  row.push(cell.trim());
+  if (row.some(Boolean)) rows.push(row);
+  return rows;
+}
+
 export default function Home() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [filter, setFilter] = useState<"All" | Temperature>("All");
@@ -61,6 +97,12 @@ export default function Home() {
   const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
   const [authMessage, setAuthMessage] = useState("");
   const [savingLead, setSavingLead] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [csvLeads, setCsvLeads] = useState<LeadInsert[]>([]);
+  const [csvErrors, setCsvErrors] = useState<string[]>([]);
+  const [csvFileName, setCsvFileName] = useState("");
+  const [importingCsv, setImportingCsv] = useState(false);
+  const [importMessage, setImportMessage] = useState("");
 
   useEffect(() => {
     if (!supabase) return;
@@ -189,6 +231,77 @@ export default function Home() {
     setShowForm(false);
   }
 
+  async function prepareCsv(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    setCsvLeads([]);
+    setCsvErrors([]);
+    setImportMessage("");
+    if (!file) return;
+    setCsvFileName(file.name);
+
+    const rows = parseCsv(await file.text());
+    if (rows.length < 2) {
+      setCsvErrors(["The file needs a header row and at least one lead."]);
+      return;
+    }
+
+    const headers = rows[0].map((header) => header.trim().toLowerCase().replaceAll(" ", "_"));
+    const missing = csvColumns.filter((column) => !headers.includes(column));
+    if (missing.length) {
+      setCsvErrors([`Missing required column${missing.length > 1 ? "s" : ""}: ${missing.join(", ")}.`]);
+      return;
+    }
+
+    const prepared: LeadInsert[] = [];
+    const errors: string[] = [];
+    rows.slice(1).forEach((values, rowIndex) => {
+      const valueFor = (column: typeof csvColumns[number]) => values[headers.indexOf(column)]?.trim() ?? "";
+      const name = valueFor("name");
+      const email = valueFor("email");
+      const budget = Number(valueFor("budget").replaceAll(/[$,]/g, ""));
+      const timeline = valueFor("timeline");
+      const property = valueFor("property");
+      const location = valueFor("location");
+      const source = valueFor("source");
+      const rowNumber = rowIndex + 2;
+
+      if (!name || !email || !property || !location || !source) errors.push(`Row ${rowNumber}: complete every required field.`);
+      else if (!/^\S+@\S+\.\S+$/.test(email)) errors.push(`Row ${rowNumber}: email is not valid.`);
+      else if (!Number.isFinite(budget) || budget < 50000) errors.push(`Row ${rowNumber}: budget must be at least 50000.`);
+      else if (!allowedTimelines.has(timeline)) errors.push(`Row ${rowNumber}: timeline must be 0-30 days, 1-3 months, 3-6 months, or 6+ months.`);
+      else {
+        const score = scoreLead(budget, timeline, source);
+        prepared.push({
+          name, email, budget, timeline, property, location, source, score,
+          temperature: getTemperature(score),
+          intent: timeline === "0-30 days" ? "High purchase intent detected" : "Exploring suitable property options",
+          status: score >= 80 ? "Qualified" : "Nurture",
+          updated: "Just now",
+        });
+      }
+    });
+    setCsvLeads(prepared);
+    setCsvErrors(errors.slice(0, 8));
+  }
+
+  async function importCsvLeads() {
+    if (!supabase || !userId || !csvLeads.length || csvErrors.length) return;
+    setImportingCsv(true);
+    setImportMessage("");
+    const rows = csvLeads.map((lead) => ({ ...lead, user_id: userId }));
+    const result = await supabase.from("leads").insert(rows).select("id,name,email,source,budget,timeline,property,location,score,temperature,intent,status,updated");
+    setImportingCsv(false);
+    if (result.error) {
+      setImportMessage(result.error.message);
+      return;
+    }
+    const saved = result.data as Lead[];
+    setLeads((current) => [...saved, ...current]);
+    setImportMessage(`${saved.length} lead${saved.length === 1 ? "" : "s"} imported, scored, and saved.`);
+    setCsvLeads([]);
+    setCsvFileName("");
+  }
+
   if (!isSupabaseConfigured) return <main className="auth-shell"><section className="auth-card"><span className="brand-mark">LQ</span><p className="eyebrow">SETUP REQUIRED</p><h1>Connect Supabase</h1><p>Add <code>NEXT_PUBLIC_SUPABASE_URL</code> and <code>NEXT_PUBLIC_SUPABASE_ANON_KEY</code> to start the secure workspace.</p></section></main>;
 
   if (!authReady) return <main className="auth-shell"><section className="auth-card"><span className="brand-mark">LQ</span><h1>Loading secure workspace...</h1></section></main>;
@@ -245,7 +358,7 @@ export default function Home() {
         <section className="lead-panel">
           <div className="panel-header">
             <div><h2>Lead intelligence</h2><p>AI-ranked opportunities across every acquisition source.</p></div>
-            <div className="panel-tools"><label className="search"><span>⌕</span><input aria-label="Search leads" placeholder="Search leads..." value={query} onChange={(e) => { setQuery(e.target.value); setExportUrl(""); }} /></label><button className="secondary-button" onClick={exportLeads}>⇩ Export</button>{exportUrl && <a className="download-link" href={exportUrl} download={`leadiq-${filter.toLowerCase()}-leads.csv`}>CSV ready — Download</a>}</div>
+            <div className="panel-tools"><label className="search"><span>⌕</span><input aria-label="Search leads" placeholder="Search leads..." value={query} onChange={(e) => { setQuery(e.target.value); setExportUrl(""); }} /></label><button className="secondary-button" onClick={() => { setShowImport(true); setImportMessage(""); }}>↑ Import CSV</button><button className="secondary-button" onClick={exportLeads}>⇩ Export</button>{exportUrl && <a className="download-link" href={exportUrl} download={`leadiq-${filter.toLowerCase()}-leads.csv`}>CSV ready — Download</a>}</div>
           </div>
           <div className="filter-row">
             {(["All", "Hot", "Warm", "Cold"] as const).map((item) => <button key={item} className={filter === item ? "selected" : ""} onClick={() => { setFilter(item); setExportUrl(""); }}>{item}{item !== "All" && <span>{leads.filter((lead) => lead.temperature === item).length}</span>}</button>)}
@@ -274,6 +387,8 @@ export default function Home() {
       </section>
 
       {showForm && <div className="modal-backdrop" onMouseDown={() => setShowForm(false)}><section className="modal" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="new-lead-title"><button className="modal-close" onClick={() => setShowForm(false)} aria-label="Close">×</button><span className="modal-kicker">AI QUALIFICATION</span><h2 id="new-lead-title">Analyze a new lead</h2><p>Add the prospect details and LeadIQ will score purchase intent instantly.</p><form onSubmit={addLead}><div className="form-grid"><label>Full name<input name="name" required placeholder="Alex Morgan" /></label><label>Email<input name="email" type="email" required placeholder="alex@example.com" /></label><label>Budget (USD)<input name="budget" type="number" min="50000" required placeholder="450000" /></label><label>Buying timeline<select name="timeline" defaultValue="1-3 months"><option>0-30 days</option><option>1-3 months</option><option>3-6 months</option><option>6+ months</option></select></label><label>Property type<input name="property" required placeholder="2 bedroom apartment" /></label><label>Preferred location<input name="location" required placeholder="Dubai Marina" /></label><label className="full">Lead source<select name="source" defaultValue="Website"><option>Website</option><option>Referral</option><option>Facebook</option><option>Google Ads</option><option>LinkedIn</option></select></label></div><button className="primary-button form-submit" disabled={savingLead}>{savingLead ? "Saving securely..." : "✦ Analyze & qualify lead"}</button></form></section></div>}
+
+      {showImport && <div className="modal-backdrop" onMouseDown={() => setShowImport(false)}><section className="modal import-modal" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="csv-import-title"><button className="modal-close" onClick={() => setShowImport(false)} aria-label="Close">×</button><span className="modal-kicker">BULK QUALIFICATION</span><h2 id="csv-import-title">Import leads from CSV</h2><p>Upload a spreadsheet export. Every valid row will be scored and saved to your secure workspace.</p><a className="template-link" href="/leadiq-import-template.csv" download>Download CSV template</a><label className="csv-drop"><input type="file" accept=".csv,text/csv" onChange={prepareCsv} /><span>↑</span><strong>{csvFileName || "Choose a CSV file"}</strong><small>Required: name, email, budget, timeline, property, location, source</small></label>{csvLeads.length > 0 && <div className="import-summary"><strong>{csvLeads.length} valid lead{csvLeads.length === 1 ? "" : "s"} ready</strong><span>{csvLeads.filter((lead) => lead.temperature === "Hot").length} Hot · {csvLeads.filter((lead) => lead.temperature === "Warm").length} Warm · {csvLeads.filter((lead) => lead.temperature === "Cold").length} Cold</span></div>}{csvErrors.length > 0 && <div className="import-errors" role="alert"><strong>Fix these CSV issues</strong>{csvErrors.map((error) => <p key={error}>{error}</p>)}</div>}{importMessage && <div className="import-message" role="status">{importMessage}</div>}<button className="primary-button form-submit" onClick={importCsvLeads} disabled={!csvLeads.length || csvErrors.length > 0 || importingCsv}>{importingCsv ? "Importing securely..." : `Import ${csvLeads.length || ""} lead${csvLeads.length === 1 ? "" : "s"}`}</button></section></div>}
 
       {selected && <div className="drawer-backdrop" onMouseDown={() => { setSelected(null); setFollowUpCreated(false); }}><aside className="drawer" onMouseDown={(e) => e.stopPropagation()} aria-label="Lead intelligence details"><button className="modal-close" onClick={() => { setSelected(null); setFollowUpCreated(false); }} aria-label="Close">×</button><p className="eyebrow">AI LEAD PROFILE</p><div className="drawer-person"><span>{selected.name.split(" ").map((n) => n[0]).join("").slice(0, 2)}</span><div><h2>{selected.name}</h2><p>{selected.email}</p></div></div><div className="drawer-score"><div><small>QUALIFICATION SCORE</small><strong>{selected.score}<em>/100</em></strong></div><span className={`temp ${selected.temperature.toLowerCase()}`}>{selected.temperature} lead</span></div><div className="reason-box"><span>✦</span><div><strong>AI recommendation</strong><p>{selected.score >= 80 ? "Contact this lead within 15 minutes and offer a viewing slot. Their budget and timeline show strong purchase readiness." : "Add this prospect to a tailored nurture sequence and follow up with matching property options."}</p></div></div><dl><div><dt>Budget</dt><dd>{money.format(selected.budget)}</dd></div><div><dt>Timeline</dt><dd>{selected.timeline}</dd></div><div><dt>Property</dt><dd>{selected.property}</dd></div><div><dt>Location</dt><dd>{selected.location}</dd></div><div><dt>Source</dt><dd>{selected.source}</dd></div><div><dt>CRM status</dt><dd>{selected.status}</dd></div></dl>{followUpCreated && <div className="follow-up-success" role="status">✓ Personalized follow-up created for {selected.name}.</div>}<button className="primary-button drawer-cta" onClick={() => setFollowUpCreated(true)} disabled={followUpCreated}>{followUpCreated ? "Follow-up ready" : "Create personalized follow-up →"}</button></aside></div>}
     </main>

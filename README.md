@@ -22,6 +22,7 @@ The demo workspace uses a confirmed Supabase account. Leads added through it are
 - Working workspace views for automations, sources, analytics, and settings
 - Notification panel with actionable pipeline updates
 - CSV export for the currently visible lead results
+- Bulk CSV import with row validation, automatic scoring, and secure persistence
 - Supabase email/password authentication with protected workspace access
 - Per-user persistent leads secured with Row Level Security
 - Responsive dashboard layout for desktop and mobile screens
@@ -42,6 +43,7 @@ The demo workspace uses a confirmed Supabase account. Leads added through it are
 | All / Warm / Cold | Displays leads in the selected qualification category |
 | Search | Filters leads by name, email, location, or source |
 | Export | Downloads the visible results as a CSV file |
+| Import CSV | Validates, scores, and permanently saves multiple leads at once |
 | Lead row / arrow | Opens the matching AI lead profile |
 | Create personalized follow-up | Creates a visible follow-up confirmation for that lead |
 
