@@ -27,6 +27,7 @@ type Lead = {
 type LeadNote = { id: number; lead_id: number; body: string; created_at: string };
 type LeadTask = { id: number; lead_id: number; title: string; due_date: string | null; is_complete: boolean; created_at: string };
 type LeadActivity = { id: number; lead_id: number; kind: string; description: string; created_at: string };
+type LeadEmail = { id: number; lead_id: number; recipient: string; subject: string; body: string; status: string; created_at: string };
 
 type LeadInsert = Omit<Lead, "id">;
 
@@ -96,7 +97,6 @@ export default function Home() {
   const [selected, setSelected] = useState<Lead | null>(null);
   const [activeView, setActiveView] = useState<WorkspaceView>("overview");
   const [showNotifications, setShowNotifications] = useState(false);
-  const [followUpCreated, setFollowUpCreated] = useState(false);
   const [exportUrl, setExportUrl] = useState("");
   const [authReady, setAuthReady] = useState(!isSupabaseConfigured);
   const [userId, setUserId] = useState("");
@@ -113,6 +113,10 @@ export default function Home() {
   const [notes, setNotes] = useState<LeadNote[]>([]);
   const [tasks, setTasks] = useState<LeadTask[]>([]);
   const [activities, setActivities] = useState<LeadActivity[]>([]);
+  const [emails, setEmails] = useState<LeadEmail[]>([]);
+  const [emailSubject, setEmailSubject] = useState("");
+  const [emailBody, setEmailBody] = useState("");
+  const [sendingEmail, setSendingEmail] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const [leadActionMessage, setLeadActionMessage] = useState("");
 
@@ -163,14 +167,16 @@ export default function Home() {
       supabase.from("lead_notes").select("id,lead_id,body,created_at").eq("lead_id", leadId).order("created_at", { ascending: false }),
       supabase.from("lead_tasks").select("id,lead_id,title,due_date,is_complete,created_at").eq("lead_id", leadId).order("created_at", { ascending: false }),
       supabase.from("lead_activities").select("id,lead_id,kind,description,created_at").eq("lead_id", leadId).order("created_at", { ascending: false }),
-    ]).then(([noteResult, taskResult, activityResult]) => {
-      if (noteResult.error || taskResult.error || activityResult.error) {
-        setLeadActionMessage(noteResult.error?.message ?? taskResult.error?.message ?? activityResult.error?.message ?? "Could not load CRM history.");
+      supabase.from("lead_emails").select("id,lead_id,recipient,subject,body,status,created_at").eq("lead_id", leadId).order("created_at", { ascending: false }),
+    ]).then(([noteResult, taskResult, activityResult, emailResult]) => {
+      if (noteResult.error || taskResult.error || activityResult.error || emailResult.error) {
+        setLeadActionMessage(noteResult.error?.message ?? taskResult.error?.message ?? activityResult.error?.message ?? emailResult.error?.message ?? "Could not load CRM history.");
         return;
       }
       setNotes(noteResult.data as LeadNote[]);
       setTasks(taskResult.data as LeadTask[]);
       setActivities(activityResult.data as LeadActivity[]);
+      setEmails(emailResult.data as LeadEmail[]);
     });
   }, [selected]);
 
@@ -403,6 +409,52 @@ export default function Home() {
     if (!task.is_complete) await recordActivity(selected.id, "task_completed", `Task completed: ${task.title}`);
   }
 
+  function prepareEmail(template: "viewing" | "options" | "check-in") {
+    if (!selected) return;
+    const firstName = selected.name.split(" ")[0];
+    const templates = {
+      viewing: {
+        subject: `Let’s arrange your ${selected.property} viewing`,
+        body: `Hi ${firstName},\n\nThank you for your interest in a ${selected.property} in ${selected.location}. I’d be happy to arrange a viewing and share the best available options within your ${money.format(selected.budget)} budget.\n\nWould you be available for a quick call today?\n\nBest regards,\nMuhammad`,
+      },
+      options: {
+        subject: `${selected.property} options selected for you`,
+        body: `Hi ${firstName},\n\nI’ve shortlisted several ${selected.property} options in ${selected.location} that match your requirements and buying timeline.\n\nReply with a convenient time and I’ll walk you through the strongest opportunities.\n\nBest regards,\nMuhammad`,
+      },
+      "check-in": {
+        subject: `Checking in on your property search`,
+        body: `Hi ${firstName},\n\nI wanted to check whether you are still exploring property options in ${selected.location}. I can send an updated shortlist based on current availability.\n\nPlease let me know what would be most helpful.\n\nBest regards,\nMuhammad`,
+      },
+    };
+    setEmailSubject(templates[template].subject);
+    setEmailBody(templates[template].body);
+    setLeadActionMessage("Email template prepared. Review it before sending.");
+  }
+
+  async function sendEmail(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!supabase || !selected || sendingEmail) return;
+    setSendingEmail(true);
+    setLeadActionMessage("Sending email securely...");
+    const { data } = await supabase.auth.getSession();
+    const response = await fetch("/api/email/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.session?.access_token ?? ""}` },
+      body: JSON.stringify({ leadId: selected.id, subject: emailSubject, body: emailBody }),
+    });
+    const result = await response.json() as { email?: LeadEmail; error?: string };
+    setSendingEmail(false);
+    if (!response.ok || !result.email) {
+      setLeadActionMessage(result.error ?? "Email could not be sent.");
+      return;
+    }
+    setEmails((current) => [result.email!, ...current]);
+    setActivities((current) => [{ id: Date.now(), lead_id: selected.id, kind: "email_sent", description: `Email sent: ${emailSubject}`, created_at: new Date().toISOString() }, ...current]);
+    setEmailSubject("");
+    setEmailBody("");
+    setLeadActionMessage(`Email sent to ${selected.email}.`);
+  }
+
   async function updateLead(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!supabase || !selected) return;
@@ -538,17 +590,17 @@ export default function Home() {
 
       {selected && showEdit && <div className="modal-backdrop" onMouseDown={() => setShowEdit(false)}><section className="modal" onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="edit-lead-title"><button className="modal-close" onClick={() => setShowEdit(false)} aria-label="Close">×</button><span className="modal-kicker">CRM RECORD</span><h2 id="edit-lead-title">Edit lead</h2><p>Update the contact and qualification details stored in Supabase.</p><form onSubmit={updateLead}><div className="form-grid"><label>Full name<input name="name" defaultValue={selected.name} required /></label><label>Email<input name="email" type="email" defaultValue={selected.email} required /></label><label>Budget (USD)<input name="budget" type="number" min="50000" defaultValue={selected.budget} required /></label><label>Buying timeline<select name="timeline" defaultValue={selected.timeline}><option>0-30 days</option><option>1-3 months</option><option>3-6 months</option><option>6+ months</option></select></label><label>Property type<input name="property" defaultValue={selected.property} required /></label><label>Preferred location<input name="location" defaultValue={selected.location} required /></label><label className="full">Lead source<select name="source" defaultValue={selected.source}><option>Website</option><option>Referral</option><option>Facebook</option><option>Google Ads</option><option>LinkedIn</option></select></label></div><button className="primary-button form-submit">Save lead changes</button></form></section></div>}
 
-      {selected && <div className="drawer-backdrop" onMouseDown={() => { setSelected(null); setFollowUpCreated(false); setLeadActionMessage(""); }}><aside className="drawer crm-drawer" onMouseDown={(event) => event.stopPropagation()} aria-label="Lead CRM details"><button className="modal-close" onClick={() => { setSelected(null); setFollowUpCreated(false); setLeadActionMessage(""); }} aria-label="Close">×</button><p className="eyebrow">COMPLETE LEAD PROFILE</p><div className="drawer-person"><span>{selected.name.split(" ").map((name) => name[0]).join("").slice(0, 2)}</span><div><h2>{selected.name}</h2><p>{selected.email}</p></div></div>
+      {selected && <div className="drawer-backdrop" onMouseDown={() => { setSelected(null); setLeadActionMessage(""); }}><aside className="drawer crm-drawer" onMouseDown={(event) => event.stopPropagation()} aria-label="Lead CRM details"><button className="modal-close" onClick={() => { setSelected(null); setLeadActionMessage(""); }} aria-label="Close">×</button><p className="eyebrow">COMPLETE LEAD PROFILE</p><div className="drawer-person"><span>{selected.name.split(" ").map((name) => name[0]).join("").slice(0, 2)}</span><div><h2>{selected.name}</h2><p>{selected.email}</p></div></div>
         <div className="drawer-actions"><button onClick={() => setShowEdit(true)}>Edit lead</button><button className="danger-button" onClick={deleteLead}>Delete</button></div>
         <div className="drawer-score"><div><small>QUALIFICATION SCORE</small><strong>{selected.score}<em>/100</em></strong></div><span className={`temp ${selected.temperature.toLowerCase()}`}>{selected.temperature} lead</span></div>
         <label className="stage-control">Pipeline stage<select value={selected.pipeline_stage} onChange={(event) => moveLead(selected, event.target.value as PipelineStage)}>{pipelineStages.map((stage) => <option key={stage}>{stage}</option>)}</select></label>
         <div className="reason-box"><span>✦</span><div><strong>AI recommendation</strong><p>{selected.score >= 80 ? "Contact this lead within 15 minutes and offer a viewing slot. Their budget and timeline show strong purchase readiness." : "Add this prospect to a tailored nurture sequence and follow up with matching property options."}</p></div></div>
         <dl><div><dt>Budget</dt><dd>{money.format(selected.budget)}</dd></div><div><dt>Timeline</dt><dd>{selected.timeline}</dd></div><div><dt>Property</dt><dd>{selected.property}</dd></div><div><dt>Location</dt><dd>{selected.location}</dd></div><div><dt>Source</dt><dd>{selected.source}</dd></div><div><dt>CRM status</dt><dd>{selected.status}</dd></div></dl>
         {leadActionMessage && <div className="crm-message" role="status">{leadActionMessage}</div>}
+        <section className="crm-section email-section"><div className="crm-section-title"><h3>Email outreach</h3><span>{emails.length} sent</span></div><div className="email-templates"><button type="button" onClick={() => prepareEmail("viewing")}>Viewing invite</button><button type="button" onClick={() => prepareEmail("options")}>Property options</button><button type="button" onClick={() => prepareEmail("check-in")}>Check-in</button></div><form className="email-form" onSubmit={sendEmail}><label>To<input value={selected.email} readOnly /></label><label>Subject<input value={emailSubject} onChange={(event) => setEmailSubject(event.target.value)} required maxLength={240} placeholder="Choose a template or write a subject" /></label><label>Message<textarea value={emailBody} onChange={(event) => setEmailBody(event.target.value)} required maxLength={10000} placeholder="Write a personalized message..." /></label><button disabled={sendingEmail}>{sendingEmail ? "Sending..." : "Send email"}</button></form><div className="email-history">{emails.map((email) => <article key={email.id}><div><strong>{email.subject}</strong><small>To {email.recipient} · {new Date(email.created_at).toLocaleString()}</small></div><span className={`email-status ${email.status}`}>{email.status}</span></article>)}{emails.length === 0 && <p className="crm-empty">No emails sent to this lead yet.</p>}</div></section>
         <section className="crm-section"><div className="crm-section-title"><h3>Tasks</h3><span>{tasks.filter((task) => !task.is_complete).length} open</span></div><form className="task-form" onSubmit={addTask}><input name="task" required placeholder="Follow up with lead" /><input name="due_date" type="date" aria-label="Task due date" /><button>Add</button></form><div className="crm-list">{tasks.map((task) => <label className={task.is_complete ? "crm-item complete" : "crm-item"} key={task.id}><input type="checkbox" checked={task.is_complete} onChange={() => toggleTask(task)} /><span><strong>{task.title}</strong><small>{task.due_date ? `Due ${task.due_date}` : "No due date"}</small></span></label>)}{tasks.length === 0 && <p className="crm-empty">No tasks yet.</p>}</div></section>
         <section className="crm-section"><div className="crm-section-title"><h3>Private notes</h3><span>{notes.length}</span></div><form className="note-form" onSubmit={addNote}><textarea name="note" required placeholder="Add context for the next follow-up..." /><button>Save note</button></form><div className="crm-list">{notes.map((note) => <article className="crm-item" key={note.id}><span><strong>{note.body}</strong><small>{new Date(note.created_at).toLocaleString()}</small></span></article>)}{notes.length === 0 && <p className="crm-empty">No notes yet.</p>}</div></section>
         <section className="crm-section"><div className="crm-section-title"><h3>Activity</h3><span>{activities.length}</span></div><div className="activity-list">{activities.map((activity) => <article key={activity.id}><i /><div><strong>{activity.description}</strong><small>{new Date(activity.created_at).toLocaleString()}</small></div></article>)}{activities.length === 0 && <p className="crm-empty">Stage changes and actions will appear here.</p>}</div></section>
-        {followUpCreated && <div className="follow-up-success" role="status">✓ Personalized follow-up created for {selected.name}.</div>}<button className="primary-button drawer-cta" onClick={() => setFollowUpCreated(true)} disabled={followUpCreated}>{followUpCreated ? "Follow-up ready" : "Create personalized follow-up →"}</button>
       </aside></div>}
     </main>
   );

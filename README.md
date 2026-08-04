@@ -18,7 +18,7 @@ The demo workspace uses a confirmed Supabase account. Leads added through it are
 - Deterministic AI-style lead scoring with Hot, Warm, and Cold categories
 - New-lead qualification form with instant score, status, and recommendation
 - Search and temperature filters with live result counts
-- Detailed lead profile drawer with a personalized follow-up action
+- Detailed lead profile drawer with personalized email outreach
 - Working workspace views for automations, sources, analytics, and settings
 - Notification panel with actionable pipeline updates
 - CSV export for the currently visible lead results
@@ -28,6 +28,7 @@ The demo workspace uses a confirmed Supabase account. Leads added through it are
 - Six-stage sales pipeline with persistent stage changes
 - Complete lead editing and deletion
 - Per-lead private notes, follow-up tasks, and activity history
+- Resend-powered email composer with three personalized templates and sent-email history
 - Responsive dashboard layout for desktop and mobile screens
 
 ## Verified interactions
@@ -48,7 +49,8 @@ The demo workspace uses a confirmed Supabase account. Leads added through it are
 | Export | Downloads the visible results as a CSV file |
 | Import CSV | Validates, scores, and permanently saves multiple leads at once |
 | Lead row / arrow | Opens the matching AI lead profile |
-| Create personalized follow-up | Creates a visible follow-up confirmation for that lead |
+| Email template buttons | Prepare a personalized viewing, property-options, or check-in message |
+| Send email | Securely sends through Resend and records the message in the lead history |
 
 ## Scoring model
 
@@ -82,11 +84,15 @@ Create `.env.local` from `.env.example`, then add the project URL and publishabl
 ```env
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your-publishable-anon-key
+RESEND_API_KEY=re_your_server_side_key
+RESEND_FROM_EMAIL=LeadIQ AI <onboarding@resend.dev>
 ```
 
 Run [`supabase/migrations/202607310001_create_leads.sql`](supabase/migrations/202607310001_create_leads.sql) in the Supabase SQL editor. The migration creates the leads table, enables Row Level Security, and restricts every record to its authenticated owner.
 
 Then run [`supabase/migrations/202608040001_crm_foundation.sql`](supabase/migrations/202608040001_crm_foundation.sql). It adds pipeline stages plus owner-protected notes, tasks, and activity records. Apply migrations in filename order.
+
+Finally run [`supabase/migrations/202608040002_email_management.sql`](supabase/migrations/202608040002_email_management.sql). It creates owner-protected email history and enables email activity events. For testing without a verified domain, Resend permits `onboarding@resend.dev`; add a verified sender domain before emailing arbitrary recipients.
 
 For a Vercel-compatible production check:
 
@@ -97,7 +103,7 @@ npx next build
 ## Future improvements
 
 - Add multi-user team workspaces and role invitations
-- Add Resend-powered email delivery, templates, and delivery webhooks
+- Add Resend delivery webhooks for delivered, bounced, and failed statuses
 - Replace the local scoring function with an AI API
 - Send qualified leads and follow-ups to GoHighLevel through webhooks
 
