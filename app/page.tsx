@@ -4,7 +4,8 @@ import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 
 type Temperature = "Hot" | "Warm" | "Cold";
-type WorkspaceView = "overview" | "leads" | "automations" | "sources" | "analytics" | "settings";
+type PipelineStage = "New" | "Contacted" | "Qualified" | "Proposal" | "Won" | "Lost";
+type WorkspaceView = "overview" | "leads" | "pipeline" | "automations" | "sources" | "analytics" | "settings";
 
 type Lead = {
   id: number;
@@ -19,20 +20,26 @@ type Lead = {
   temperature: Temperature;
   intent: string;
   status: string;
+  pipeline_stage: PipelineStage;
   updated: string;
 };
+
+type LeadNote = { id: number; lead_id: number; body: string; created_at: string };
+type LeadTask = { id: number; lead_id: number; title: string; due_date: string | null; is_complete: boolean; created_at: string };
+type LeadActivity = { id: number; lead_id: number; kind: string; description: string; created_at: string };
 
 type LeadInsert = Omit<Lead, "id">;
 
 const csvColumns = ["name", "email", "budget", "timeline", "property", "location", "source"] as const;
 const allowedTimelines = new Set(["0-30 days", "1-3 months", "3-6 months", "6+ months"]);
+const pipelineStages: PipelineStage[] = ["New", "Contacted", "Qualified", "Proposal", "Won", "Lost"];
 
 const seedLeads: Lead[] = [
-  { id: 1, name: "Olivia Martin", email: "olivia@example.com", source: "Website", budget: 850000, timeline: "0-30 days", property: "Luxury villa", location: "Palm Jumeirah", score: 94, temperature: "Hot", intent: "Ready to book a viewing", status: "Qualified", updated: "2 min ago" },
-  { id: 2, name: "Daniel Kim", email: "daniel@example.com", source: "Facebook", budget: 420000, timeline: "1-3 months", property: "2 bedroom apartment", location: "Dubai Marina", score: 81, temperature: "Hot", intent: "Comparing shortlisted units", status: "Qualified", updated: "18 min ago" },
-  { id: 3, name: "Sophia Bennett", email: "sophia@example.com", source: "Referral", budget: 280000, timeline: "3-6 months", property: "Townhouse", location: "JVC", score: 68, temperature: "Warm", intent: "Researching finance options", status: "Nurture", updated: "1 hr ago" },
-  { id: 4, name: "Ethan Walker", email: "ethan@example.com", source: "Google Ads", budget: 190000, timeline: "6+ months", property: "Studio apartment", location: "Business Bay", score: 47, temperature: "Cold", intent: "Early market research", status: "Nurture", updated: "3 hrs ago" },
-  { id: 5, name: "Maya Rodriguez", email: "maya@example.com", source: "LinkedIn", budget: 510000, timeline: "1-3 months", property: "Investment apartment", location: "Downtown Dubai", score: 76, temperature: "Warm", intent: "Seeking strong rental yield", status: "Review", updated: "5 hrs ago" },
+  { id: 1, name: "Olivia Martin", email: "olivia@example.com", source: "Website", budget: 850000, timeline: "0-30 days", property: "Luxury villa", location: "Palm Jumeirah", score: 94, temperature: "Hot", intent: "Ready to book a viewing", status: "Qualified", pipeline_stage: "Qualified", updated: "2 min ago" },
+  { id: 2, name: "Daniel Kim", email: "daniel@example.com", source: "Facebook", budget: 420000, timeline: "1-3 months", property: "2 bedroom apartment", location: "Dubai Marina", score: 81, temperature: "Hot", intent: "Comparing shortlisted units", status: "Qualified", pipeline_stage: "Contacted", updated: "18 min ago" },
+  { id: 3, name: "Sophia Bennett", email: "sophia@example.com", source: "Referral", budget: 280000, timeline: "3-6 months", property: "Townhouse", location: "JVC", score: 68, temperature: "Warm", intent: "Researching finance options", status: "Nurture", pipeline_stage: "New", updated: "1 hr ago" },
+  { id: 4, name: "Ethan Walker", email: "ethan@example.com", source: "Google Ads", budget: 190000, timeline: "6+ months", property: "Studio apartment", location: "Business Bay", score: 47, temperature: "Cold", intent: "Early market research", status: "Nurture", pipeline_stage: "New", updated: "3 hrs ago" },
+  { id: 5, name: "Maya Rodriguez", email: "maya@example.com", source: "LinkedIn", budget: 510000, timeline: "1-3 months", property: "Investment apartment", location: "Downtown Dubai", score: 76, temperature: "Warm", intent: "Seeking strong rental yield", status: "Review", pipeline_stage: "Proposal", updated: "5 hrs ago" },
 ];
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
@@ -103,6 +110,11 @@ export default function Home() {
   const [csvFileName, setCsvFileName] = useState("");
   const [importingCsv, setImportingCsv] = useState(false);
   const [importMessage, setImportMessage] = useState("");
+  const [notes, setNotes] = useState<LeadNote[]>([]);
+  const [tasks, setTasks] = useState<LeadTask[]>([]);
+  const [activities, setActivities] = useState<LeadActivity[]>([]);
+  const [showEdit, setShowEdit] = useState(false);
+  const [leadActionMessage, setLeadActionMessage] = useState("");
 
   useEffect(() => {
     if (!supabase) return;
@@ -125,7 +137,7 @@ export default function Home() {
     if (!supabase || !userId) return;
 
     async function loadLeads() {
-      const { data, error } = await supabase!.from("leads").select("id,name,email,source,budget,timeline,property,location,score,temperature,intent,status,updated").order("created_at", { ascending: false });
+      const { data, error } = await supabase!.from("leads").select("id,name,email,source,budget,timeline,property,location,score,temperature,intent,status,pipeline_stage,updated").order("created_at", { ascending: false });
       if (error) {
         setAuthMessage(error.message);
         return;
@@ -135,13 +147,32 @@ export default function Home() {
         return;
       }
 
-      const starterRows = seedLeads.map((lead) => ({ name: lead.name, email: lead.email, source: lead.source, budget: lead.budget, timeline: lead.timeline, property: lead.property, location: lead.location, score: lead.score, temperature: lead.temperature, intent: lead.intent, status: lead.status, updated: lead.updated, user_id: userId }));
-      const seeded = await supabase!.from("leads").insert(starterRows).select("id,name,email,source,budget,timeline,property,location,score,temperature,intent,status,updated");
+      const starterRows = seedLeads.map((lead) => ({ name: lead.name, email: lead.email, source: lead.source, budget: lead.budget, timeline: lead.timeline, property: lead.property, location: lead.location, score: lead.score, temperature: lead.temperature, intent: lead.intent, status: lead.status, pipeline_stage: lead.pipeline_stage, updated: lead.updated, user_id: userId }));
+      const seeded = await supabase!.from("leads").insert(starterRows).select("id,name,email,source,budget,timeline,property,location,score,temperature,intent,status,pipeline_stage,updated");
       if (seeded.error) setAuthMessage(seeded.error.message);
       else setLeads(seeded.data as Lead[]);
     }
     loadLeads();
   }, [userId]);
+
+  useEffect(() => {
+    if (!supabase || !selected) return;
+
+    const leadId = selected.id;
+    Promise.all([
+      supabase.from("lead_notes").select("id,lead_id,body,created_at").eq("lead_id", leadId).order("created_at", { ascending: false }),
+      supabase.from("lead_tasks").select("id,lead_id,title,due_date,is_complete,created_at").eq("lead_id", leadId).order("created_at", { ascending: false }),
+      supabase.from("lead_activities").select("id,lead_id,kind,description,created_at").eq("lead_id", leadId).order("created_at", { ascending: false }),
+    ]).then(([noteResult, taskResult, activityResult]) => {
+      if (noteResult.error || taskResult.error || activityResult.error) {
+        setLeadActionMessage(noteResult.error?.message ?? taskResult.error?.message ?? activityResult.error?.message ?? "Could not load CRM history.");
+        return;
+      }
+      setNotes(noteResult.data as LeadNote[]);
+      setTasks(taskResult.data as LeadTask[]);
+      setActivities(activityResult.data as LeadActivity[]);
+    });
+  }, [selected]);
 
   const visibleLeads = useMemo(() => leads.filter((lead) => {
     const matchesFilter = filter === "All" || lead.temperature === filter;
@@ -153,7 +184,7 @@ export default function Home() {
   const hotLeads = leads.filter((lead) => lead.temperature === "Hot").length;
   const qualified = leads.filter((lead) => lead.status === "Qualified").length;
 
-  const viewCopy: Record<Exclude<WorkspaceView, "overview" | "leads">, { title: string; description: string }> = {
+  const viewCopy: Record<Exclude<WorkspaceView, "overview" | "leads" | "pipeline">, { title: string; description: string }> = {
     automations: { title: "Automations", description: "Follow-up rules triggered by lead score and buying timeline." },
     sources: { title: "Lead sources", description: "Acquisition performance across your connected marketing channels." },
     analytics: { title: "Pipeline analytics", description: "A live summary of lead quality and sales readiness." },
@@ -216,10 +247,11 @@ export default function Home() {
       temperature,
       intent: timeline === "0-30 days" ? "High purchase intent detected" : "Exploring suitable property options",
       status: score >= 80 ? "Qualified" : "Nurture",
+      pipeline_stage: "New",
       updated: "Just now",
     };
     setSavingLead(true);
-    const result = await supabase!.from("leads").insert({ ...newLead, id: undefined, user_id: userId }).select("id,name,email,source,budget,timeline,property,location,score,temperature,intent,status,updated").single();
+    const result = await supabase!.from("leads").insert({ ...newLead, id: undefined, user_id: userId }).select("id,name,email,source,budget,timeline,property,location,score,temperature,intent,status,pipeline_stage,updated").single();
     setSavingLead(false);
     if (result.error) {
       setAuthMessage(result.error.message);
@@ -276,6 +308,7 @@ export default function Home() {
           temperature: getTemperature(score),
           intent: timeline === "0-30 days" ? "High purchase intent detected" : "Exploring suitable property options",
           status: score >= 80 ? "Qualified" : "Nurture",
+          pipeline_stage: "New",
           updated: "Just now",
         });
       }
@@ -289,7 +322,7 @@ export default function Home() {
     setImportingCsv(true);
     setImportMessage("");
     const rows = csvLeads.map((lead) => ({ ...lead, user_id: userId }));
-    const result = await supabase.from("leads").insert(rows).select("id,name,email,source,budget,timeline,property,location,score,temperature,intent,status,updated");
+    const result = await supabase.from("leads").insert(rows).select("id,name,email,source,budget,timeline,property,location,score,temperature,intent,status,pipeline_stage,updated");
     setImportingCsv(false);
     if (result.error) {
       setImportMessage(result.error.message);
@@ -300,6 +333,113 @@ export default function Home() {
     setImportMessage(`${saved.length} lead${saved.length === 1 ? "" : "s"} imported, scored, and saved.`);
     setCsvLeads([]);
     setCsvFileName("");
+  }
+
+  async function recordActivity(leadId: number, kind: LeadActivity["kind"], description: string) {
+    if (!supabase || !userId) return;
+    const result = await supabase.from("lead_activities").insert({ lead_id: leadId, user_id: userId, kind, description }).select("id,lead_id,kind,description,created_at").single();
+    if (!result.error && selected?.id === leadId) setActivities((current) => [result.data as LeadActivity, ...current]);
+  }
+
+  async function moveLead(lead: Lead, pipelineStage: PipelineStage) {
+    if (!supabase || lead.pipeline_stage === pipelineStage) return;
+    setLeadActionMessage("Updating pipeline...");
+    const result = await supabase.from("leads").update({ pipeline_stage: pipelineStage, updated: "Just now" }).eq("id", lead.id).select("id,name,email,source,budget,timeline,property,location,score,temperature,intent,status,pipeline_stage,updated").single();
+    if (result.error) {
+      setLeadActionMessage(result.error.message);
+      return;
+    }
+    const updatedLead = result.data as Lead;
+    setLeads((current) => current.map((item) => item.id === lead.id ? updatedLead : item));
+    if (selected?.id === lead.id) setSelected(updatedLead);
+    setLeadActionMessage(`Moved to ${pipelineStage}.`);
+    await recordActivity(lead.id, "stage_changed", `Pipeline stage changed from ${lead.pipeline_stage} to ${pipelineStage}.`);
+  }
+
+  async function addNote(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!supabase || !selected || !userId) return;
+    const form = event.currentTarget;
+    const body = String(new FormData(form).get("note")).trim();
+    if (!body) return;
+    const result = await supabase.from("lead_notes").insert({ lead_id: selected.id, user_id: userId, body }).select("id,lead_id,body,created_at").single();
+    if (result.error) {
+      setLeadActionMessage(result.error.message);
+      return;
+    }
+    setNotes((current) => [result.data as LeadNote, ...current]);
+    form.reset();
+    setLeadActionMessage("Note saved.");
+    await recordActivity(selected.id, "note_added", "A private note was added.");
+  }
+
+  async function addTask(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!supabase || !selected || !userId) return;
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const title = String(data.get("task")).trim();
+    const dueDate = String(data.get("due_date")) || null;
+    if (!title) return;
+    const result = await supabase.from("lead_tasks").insert({ lead_id: selected.id, user_id: userId, title, due_date: dueDate }).select("id,lead_id,title,due_date,is_complete,created_at").single();
+    if (result.error) {
+      setLeadActionMessage(result.error.message);
+      return;
+    }
+    setTasks((current) => [result.data as LeadTask, ...current]);
+    form.reset();
+    setLeadActionMessage("Task created.");
+    await recordActivity(selected.id, "task_added", `Task created: ${title}`);
+  }
+
+  async function toggleTask(task: LeadTask) {
+    if (!supabase || !selected) return;
+    const result = await supabase.from("lead_tasks").update({ is_complete: !task.is_complete }).eq("id", task.id).select("id,lead_id,title,due_date,is_complete,created_at").single();
+    if (result.error) {
+      setLeadActionMessage(result.error.message);
+      return;
+    }
+    setTasks((current) => current.map((item) => item.id === task.id ? result.data as LeadTask : item));
+    if (!task.is_complete) await recordActivity(selected.id, "task_completed", `Task completed: ${task.title}`);
+  }
+
+  async function updateLead(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!supabase || !selected) return;
+    const data = new FormData(event.currentTarget);
+    const budget = Number(data.get("budget"));
+    const timeline = String(data.get("timeline"));
+    const source = String(data.get("source"));
+    const score = scoreLead(budget, timeline, source);
+    const updates = {
+      name: String(data.get("name")), email: String(data.get("email")), budget, timeline,
+      property: String(data.get("property")), location: String(data.get("location")), source,
+      score, temperature: getTemperature(score), status: score >= 80 ? "Qualified" : "Nurture", updated: "Just now",
+    };
+    const result = await supabase.from("leads").update(updates).eq("id", selected.id).select("id,name,email,source,budget,timeline,property,location,score,temperature,intent,status,pipeline_stage,updated").single();
+    if (result.error) {
+      setLeadActionMessage(result.error.message);
+      return;
+    }
+    const updatedLead = result.data as Lead;
+    setLeads((current) => current.map((lead) => lead.id === updatedLead.id ? updatedLead : lead));
+    setSelected(updatedLead);
+    setShowEdit(false);
+    setLeadActionMessage("Lead details updated.");
+    await recordActivity(updatedLead.id, "updated", "Lead contact and qualification details were updated.");
+  }
+
+  async function deleteLead() {
+    if (!supabase || !selected || !window.confirm(`Delete ${selected.name} and all related CRM history?`)) return;
+    const leadId = selected.id;
+    const result = await supabase.from("leads").delete().eq("id", leadId);
+    if (result.error) {
+      setLeadActionMessage(result.error.message);
+      return;
+    }
+    setLeads((current) => current.filter((lead) => lead.id !== leadId));
+    setSelected(null);
+    setLeadActionMessage("");
   }
 
   if (!isSupabaseConfigured) return <main className="auth-shell"><section className="auth-card"><span className="brand-mark">LQ</span><p className="eyebrow">SETUP REQUIRED</p><h1>Connect Supabase</h1><p>Add <code>NEXT_PUBLIC_SUPABASE_URL</code> and <code>NEXT_PUBLIC_SUPABASE_ANON_KEY</code> to start the secure workspace.</p></section></main>;
@@ -316,6 +456,7 @@ export default function Home() {
         <nav aria-label="Main navigation">
           <button className={`nav-item ${activeView === "overview" ? "active" : ""}`} onClick={() => setActiveView("overview")}><span>⌁</span>Overview</button>
           <button className={`nav-item ${activeView === "leads" ? "active" : ""}`} onClick={() => setActiveView("leads")}><span>◎</span>Lead intelligence <em>{leads.length}</em></button>
+          <button className={`nav-item ${activeView === "pipeline" ? "active" : ""}`} onClick={() => setActiveView("pipeline")}><span>▤</span>Sales pipeline</button>
           <button className={`nav-item ${activeView === "automations" ? "active" : ""}`} onClick={() => setActiveView("automations")}><span>↗</span>Automations</button>
           <button className={`nav-item ${activeView === "sources" ? "active" : ""}`} onClick={() => setActiveView("sources")}><span>◇</span>Sources</button>
           <button className={`nav-item ${activeView === "analytics" ? "active" : ""}`} onClick={() => setActiveView("analytics")}><span>▦</span>Analytics</button>
@@ -334,7 +475,12 @@ export default function Home() {
 
         {showNotifications && <section className="notification-panel" aria-label="Notifications panel"><div className="notification-head"><strong>Notifications</strong><button aria-label="Close notifications" onClick={() => setShowNotifications(false)}>×</button></div><p>{hotLeads} hot lead(s) are ready for immediate follow-up.</p><p>Your AI scoring engine is online and synced with Supabase.</p></section>}
 
-        {activeView !== "overview" && activeView !== "leads" && <section className="workspace-panel" aria-live="polite">
+        {activeView === "pipeline" && <section className="workspace-panel pipeline-panel" aria-live="polite">
+          <p className="eyebrow">LIVE SALES PIPELINE</p><h2>Move every opportunity toward closing</h2><p>Change stages from each card while LeadIQ keeps the activity history.</p>
+          <div className="pipeline-board">{pipelineStages.map((stage) => <section className="pipeline-column" key={stage}><header><strong>{stage}</strong><span>{leads.filter((lead) => lead.pipeline_stage === stage).length}</span></header><div>{leads.filter((lead) => lead.pipeline_stage === stage).map((lead) => <article className="pipeline-card" key={lead.id} onClick={() => setSelected(lead)}><div><strong>{lead.name}</strong><span className={`temp ${lead.temperature.toLowerCase()}`}>{lead.temperature}</span></div><p>{lead.property} · {money.format(lead.budget)}</p><small>{lead.source} · Score {lead.score}</small><label onClick={(event) => event.stopPropagation()}>Stage<select aria-label={`Pipeline stage for ${lead.name}`} value={lead.pipeline_stage} onChange={(event) => moveLead(lead, event.target.value as PipelineStage)}>{pipelineStages.map((option) => <option key={option}>{option}</option>)}</select></label></article>)}</div></section>)}</div>
+        </section>}
+
+        {activeView !== "overview" && activeView !== "leads" && activeView !== "pipeline" && <section className="workspace-panel" aria-live="polite">
           <p className="eyebrow">WORKSPACE VIEW</p><h2>{viewCopy[activeView].title}</h2><p>{viewCopy[activeView].description}</p>
           {activeView === "automations" && <div className="workspace-grid"><article><strong>Hot lead alert</strong><p>Instant agent notification for scores of 80 or higher.</p><span>Active</span></article><article><strong>Nurture sequence</strong><p>Property recommendations for Warm and Cold prospects.</p><span>Active</span></article></div>}
           {activeView === "sources" && <div className="workspace-grid">{["Website", "Facebook", "Referral", "Google Ads", "LinkedIn"].map((source) => <article key={source}><strong>{source}</strong><p>{leads.filter((lead) => lead.source === source).length} active lead(s)</p></article>)}</div>}
@@ -390,7 +536,20 @@ export default function Home() {
 
       {showImport && <div className="modal-backdrop" onMouseDown={() => setShowImport(false)}><section className="modal import-modal" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="csv-import-title"><button className="modal-close" onClick={() => setShowImport(false)} aria-label="Close">×</button><span className="modal-kicker">BULK QUALIFICATION</span><h2 id="csv-import-title">Import leads from CSV</h2><p>Upload a spreadsheet export. Every valid row will be scored and saved to your secure workspace.</p><a className="template-link" href="/leadiq-import-template.csv" download>Download CSV template</a><label className="csv-drop"><input type="file" accept=".csv,text/csv" onChange={prepareCsv} /><span>↑</span><strong>{csvFileName || "Choose a CSV file"}</strong><small>Required: name, email, budget, timeline, property, location, source</small></label>{csvLeads.length > 0 && <div className="import-summary"><strong>{csvLeads.length} valid lead{csvLeads.length === 1 ? "" : "s"} ready</strong><span>{csvLeads.filter((lead) => lead.temperature === "Hot").length} Hot · {csvLeads.filter((lead) => lead.temperature === "Warm").length} Warm · {csvLeads.filter((lead) => lead.temperature === "Cold").length} Cold</span></div>}{csvErrors.length > 0 && <div className="import-errors" role="alert"><strong>Fix these CSV issues</strong>{csvErrors.map((error) => <p key={error}>{error}</p>)}</div>}{importMessage && <div className="import-message" role="status">{importMessage}</div>}<button className="primary-button form-submit" onClick={importCsvLeads} disabled={!csvLeads.length || csvErrors.length > 0 || importingCsv}>{importingCsv ? "Importing securely..." : `Import ${csvLeads.length || ""} lead${csvLeads.length === 1 ? "" : "s"}`}</button></section></div>}
 
-      {selected && <div className="drawer-backdrop" onMouseDown={() => { setSelected(null); setFollowUpCreated(false); }}><aside className="drawer" onMouseDown={(e) => e.stopPropagation()} aria-label="Lead intelligence details"><button className="modal-close" onClick={() => { setSelected(null); setFollowUpCreated(false); }} aria-label="Close">×</button><p className="eyebrow">AI LEAD PROFILE</p><div className="drawer-person"><span>{selected.name.split(" ").map((n) => n[0]).join("").slice(0, 2)}</span><div><h2>{selected.name}</h2><p>{selected.email}</p></div></div><div className="drawer-score"><div><small>QUALIFICATION SCORE</small><strong>{selected.score}<em>/100</em></strong></div><span className={`temp ${selected.temperature.toLowerCase()}`}>{selected.temperature} lead</span></div><div className="reason-box"><span>✦</span><div><strong>AI recommendation</strong><p>{selected.score >= 80 ? "Contact this lead within 15 minutes and offer a viewing slot. Their budget and timeline show strong purchase readiness." : "Add this prospect to a tailored nurture sequence and follow up with matching property options."}</p></div></div><dl><div><dt>Budget</dt><dd>{money.format(selected.budget)}</dd></div><div><dt>Timeline</dt><dd>{selected.timeline}</dd></div><div><dt>Property</dt><dd>{selected.property}</dd></div><div><dt>Location</dt><dd>{selected.location}</dd></div><div><dt>Source</dt><dd>{selected.source}</dd></div><div><dt>CRM status</dt><dd>{selected.status}</dd></div></dl>{followUpCreated && <div className="follow-up-success" role="status">✓ Personalized follow-up created for {selected.name}.</div>}<button className="primary-button drawer-cta" onClick={() => setFollowUpCreated(true)} disabled={followUpCreated}>{followUpCreated ? "Follow-up ready" : "Create personalized follow-up →"}</button></aside></div>}
+      {selected && showEdit && <div className="modal-backdrop" onMouseDown={() => setShowEdit(false)}><section className="modal" onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="edit-lead-title"><button className="modal-close" onClick={() => setShowEdit(false)} aria-label="Close">×</button><span className="modal-kicker">CRM RECORD</span><h2 id="edit-lead-title">Edit lead</h2><p>Update the contact and qualification details stored in Supabase.</p><form onSubmit={updateLead}><div className="form-grid"><label>Full name<input name="name" defaultValue={selected.name} required /></label><label>Email<input name="email" type="email" defaultValue={selected.email} required /></label><label>Budget (USD)<input name="budget" type="number" min="50000" defaultValue={selected.budget} required /></label><label>Buying timeline<select name="timeline" defaultValue={selected.timeline}><option>0-30 days</option><option>1-3 months</option><option>3-6 months</option><option>6+ months</option></select></label><label>Property type<input name="property" defaultValue={selected.property} required /></label><label>Preferred location<input name="location" defaultValue={selected.location} required /></label><label className="full">Lead source<select name="source" defaultValue={selected.source}><option>Website</option><option>Referral</option><option>Facebook</option><option>Google Ads</option><option>LinkedIn</option></select></label></div><button className="primary-button form-submit">Save lead changes</button></form></section></div>}
+
+      {selected && <div className="drawer-backdrop" onMouseDown={() => { setSelected(null); setFollowUpCreated(false); setLeadActionMessage(""); }}><aside className="drawer crm-drawer" onMouseDown={(event) => event.stopPropagation()} aria-label="Lead CRM details"><button className="modal-close" onClick={() => { setSelected(null); setFollowUpCreated(false); setLeadActionMessage(""); }} aria-label="Close">×</button><p className="eyebrow">COMPLETE LEAD PROFILE</p><div className="drawer-person"><span>{selected.name.split(" ").map((name) => name[0]).join("").slice(0, 2)}</span><div><h2>{selected.name}</h2><p>{selected.email}</p></div></div>
+        <div className="drawer-actions"><button onClick={() => setShowEdit(true)}>Edit lead</button><button className="danger-button" onClick={deleteLead}>Delete</button></div>
+        <div className="drawer-score"><div><small>QUALIFICATION SCORE</small><strong>{selected.score}<em>/100</em></strong></div><span className={`temp ${selected.temperature.toLowerCase()}`}>{selected.temperature} lead</span></div>
+        <label className="stage-control">Pipeline stage<select value={selected.pipeline_stage} onChange={(event) => moveLead(selected, event.target.value as PipelineStage)}>{pipelineStages.map((stage) => <option key={stage}>{stage}</option>)}</select></label>
+        <div className="reason-box"><span>✦</span><div><strong>AI recommendation</strong><p>{selected.score >= 80 ? "Contact this lead within 15 minutes and offer a viewing slot. Their budget and timeline show strong purchase readiness." : "Add this prospect to a tailored nurture sequence and follow up with matching property options."}</p></div></div>
+        <dl><div><dt>Budget</dt><dd>{money.format(selected.budget)}</dd></div><div><dt>Timeline</dt><dd>{selected.timeline}</dd></div><div><dt>Property</dt><dd>{selected.property}</dd></div><div><dt>Location</dt><dd>{selected.location}</dd></div><div><dt>Source</dt><dd>{selected.source}</dd></div><div><dt>CRM status</dt><dd>{selected.status}</dd></div></dl>
+        {leadActionMessage && <div className="crm-message" role="status">{leadActionMessage}</div>}
+        <section className="crm-section"><div className="crm-section-title"><h3>Tasks</h3><span>{tasks.filter((task) => !task.is_complete).length} open</span></div><form className="task-form" onSubmit={addTask}><input name="task" required placeholder="Follow up with lead" /><input name="due_date" type="date" aria-label="Task due date" /><button>Add</button></form><div className="crm-list">{tasks.map((task) => <label className={task.is_complete ? "crm-item complete" : "crm-item"} key={task.id}><input type="checkbox" checked={task.is_complete} onChange={() => toggleTask(task)} /><span><strong>{task.title}</strong><small>{task.due_date ? `Due ${task.due_date}` : "No due date"}</small></span></label>)}{tasks.length === 0 && <p className="crm-empty">No tasks yet.</p>}</div></section>
+        <section className="crm-section"><div className="crm-section-title"><h3>Private notes</h3><span>{notes.length}</span></div><form className="note-form" onSubmit={addNote}><textarea name="note" required placeholder="Add context for the next follow-up..." /><button>Save note</button></form><div className="crm-list">{notes.map((note) => <article className="crm-item" key={note.id}><span><strong>{note.body}</strong><small>{new Date(note.created_at).toLocaleString()}</small></span></article>)}{notes.length === 0 && <p className="crm-empty">No notes yet.</p>}</div></section>
+        <section className="crm-section"><div className="crm-section-title"><h3>Activity</h3><span>{activities.length}</span></div><div className="activity-list">{activities.map((activity) => <article key={activity.id}><i /><div><strong>{activity.description}</strong><small>{new Date(activity.created_at).toLocaleString()}</small></div></article>)}{activities.length === 0 && <p className="crm-empty">Stage changes and actions will appear here.</p>}</div></section>
+        {followUpCreated && <div className="follow-up-success" role="status">✓ Personalized follow-up created for {selected.name}.</div>}<button className="primary-button drawer-cta" onClick={() => setFollowUpCreated(true)} disabled={followUpCreated}>{followUpCreated ? "Follow-up ready" : "Create personalized follow-up →"}</button>
+      </aside></div>}
     </main>
   );
 }

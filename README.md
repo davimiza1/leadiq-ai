@@ -25,6 +25,9 @@ The demo workspace uses a confirmed Supabase account. Leads added through it are
 - Bulk CSV import with row validation, automatic scoring, and secure persistence
 - Supabase email/password authentication with protected workspace access
 - Per-user persistent leads secured with Row Level Security
+- Six-stage sales pipeline with persistent stage changes
+- Complete lead editing and deletion
+- Per-lead private notes, follow-up tasks, and activity history
 - Responsive dashboard layout for desktop and mobile screens
 
 ## Verified interactions
@@ -83,6 +86,8 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your-publishable-anon-key
 
 Run [`supabase/migrations/202607310001_create_leads.sql`](supabase/migrations/202607310001_create_leads.sql) in the Supabase SQL editor. The migration creates the leads table, enables Row Level Security, and restricts every record to its authenticated owner.
 
+Then run [`supabase/migrations/202608040001_crm_foundation.sql`](supabase/migrations/202608040001_crm_foundation.sql). It adds pipeline stages plus owner-protected notes, tasks, and activity records. Apply migrations in filename order.
+
 For a Vercel-compatible production check:
 
 ```bash
@@ -92,6 +97,7 @@ npx next build
 ## Future improvements
 
 - Add multi-user team workspaces and role invitations
+- Add Resend-powered email delivery, templates, and delivery webhooks
 - Replace the local scoring function with an AI API
 - Send qualified leads and follow-ups to GoHighLevel through webhooks
 
