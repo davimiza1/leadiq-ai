@@ -28,7 +28,7 @@ The demo workspace uses a confirmed Supabase account. Leads added through it are
 - Six-stage sales pipeline with persistent stage changes
 - Complete lead editing and deletion
 - Per-lead private notes, follow-up tasks, and activity history
-- Resend-powered email composer with three personalized templates and sent-email history
+- Email composer with three personalized templates, demo delivery, and per-lead history
 - Responsive dashboard layout for desktop and mobile screens
 
 ## Verified interactions
@@ -50,7 +50,7 @@ The demo workspace uses a confirmed Supabase account. Leads added through it are
 | Import CSV | Validates, scores, and permanently saves multiple leads at once |
 | Lead row / arrow | Opens the matching AI lead profile |
 | Email template buttons | Prepare a personalized viewing, property-options, or check-in message |
-| Send email | Securely sends through Resend and records the message in the lead history |
+| Save demo email | Stores personalized outreach in CRM history without external delivery |
 
 ## Scoring model
 
@@ -93,6 +93,8 @@ Run [`supabase/migrations/202607310001_create_leads.sql`](supabase/migrations/20
 Then run [`supabase/migrations/202608040001_crm_foundation.sql`](supabase/migrations/202608040001_crm_foundation.sql). It adds pipeline stages plus owner-protected notes, tasks, and activity records. Apply migrations in filename order.
 
 Finally run [`supabase/migrations/202608040002_email_management.sql`](supabase/migrations/202608040002_email_management.sql). It creates owner-protected email history and enables email activity events. For testing without a verified domain, Resend permits `onboarding@resend.dev`; add a verified sender domain before emailing arbitrary recipients.
+
+Run [`supabase/migrations/202608040003_email_demo_mode.sql`](supabase/migrations/202608040003_email_demo_mode.sql) to enable the free demo-delivery status. Without `RESEND_API_KEY`, outreach is saved to CRM history and clearly marked as demo instead of being transmitted externally.
 
 For a Vercel-compatible production check:
 
