@@ -28,12 +28,21 @@ type LeadNote = { id: number; lead_id: number; body: string; created_at: string 
 type LeadTask = { id: number; lead_id: number; title: string; due_date: string | null; is_complete: boolean; created_at: string };
 type LeadActivity = { id: number; lead_id: number; kind: string; description: string; created_at: string };
 type LeadEmail = { id: number; lead_id: number; recipient: string; subject: string; body: string; status: string; created_at: string };
+type AutomationRuleKey = "hot_followup" | "stage_followup" | "overdue_alerts" | "email_suggestions";
+type AutomationRule = { id: number; rule_key: AutomationRuleKey; name: string; description: string; is_enabled: boolean };
+type AutomationRun = { id: number; lead_id: number | null; rule_key: string; description: string; created_at: string };
 
 type LeadInsert = Omit<Lead, "id">;
 
 const csvColumns = ["name", "email", "budget", "timeline", "property", "location", "source"] as const;
 const allowedTimelines = new Set(["0-30 days", "1-3 months", "3-6 months", "6+ months"]);
 const pipelineStages: PipelineStage[] = ["New", "Contacted", "Qualified", "Proposal", "Won", "Lost"];
+const defaultAutomationRules: Omit<AutomationRule, "id">[] = [
+  { rule_key: "hot_followup", name: "Hot lead follow-up", description: "Create a next-day call task whenever a new lead scores 80 or higher.", is_enabled: true },
+  { rule_key: "stage_followup", name: "Proposal follow-up", description: "Create a follow-up task when an opportunity enters the Proposal stage.", is_enabled: true },
+  { rule_key: "overdue_alerts", name: "Overdue task alerts", description: "Surface overdue CRM tasks in the automation command center.", is_enabled: true },
+  { rule_key: "email_suggestions", name: "Email suggestions", description: "Recommend outreach templates based on lead score and buying timeline.", is_enabled: true },
+];
 
 const seedLeads: Lead[] = [
   { id: 1, name: "Olivia Martin", email: "olivia@example.com", source: "Website", budget: 850000, timeline: "0-30 days", property: "Luxury villa", location: "Palm Jumeirah", score: 94, temperature: "Hot", intent: "Ready to book a viewing", status: "Qualified", pipeline_stage: "Qualified", updated: "2 min ago" },
@@ -117,6 +126,10 @@ export default function Home() {
   const [emailSubject, setEmailSubject] = useState("");
   const [emailBody, setEmailBody] = useState("");
   const [sendingEmail, setSendingEmail] = useState(false);
+  const [automationRules, setAutomationRules] = useState<AutomationRule[]>([]);
+  const [automationRuns, setAutomationRuns] = useState<AutomationRun[]>([]);
+  const [overdueTaskCount, setOverdueTaskCount] = useState(0);
+  const [automationMessage, setAutomationMessage] = useState("");
   const [showEdit, setShowEdit] = useState(false);
   const [leadActionMessage, setLeadActionMessage] = useState("");
 
@@ -157,6 +170,31 @@ export default function Home() {
       else setLeads(seeded.data as Lead[]);
     }
     loadLeads();
+  }, [userId]);
+
+  useEffect(() => {
+    if (!supabase || !userId) return;
+    async function loadAutomations() {
+      const [ruleResult, runResult, taskResult] = await Promise.all([
+        supabase!.from("automation_rules").select("id,rule_key,name,description,is_enabled").order("id"),
+        supabase!.from("automation_runs").select("id,lead_id,rule_key,description,created_at").order("created_at", { ascending: false }).limit(20),
+        supabase!.from("lead_tasks").select("id,due_date,is_complete").eq("is_complete", false).lt("due_date", new Date().toISOString().slice(0, 10)),
+      ]);
+      if (ruleResult.error || runResult.error || taskResult.error) {
+        setAutomationMessage(ruleResult.error?.message ?? runResult.error?.message ?? taskResult.error?.message ?? "Could not load automations.");
+        return;
+      }
+      let rules = ruleResult.data as AutomationRule[];
+      if (rules.length === 0) {
+        const seeded = await supabase!.from("automation_rules").insert(defaultAutomationRules.map((rule) => ({ ...rule, user_id: userId }))).select("id,rule_key,name,description,is_enabled").order("id");
+        if (seeded.error) { setAutomationMessage(seeded.error.message); return; }
+        rules = seeded.data as AutomationRule[];
+      }
+      setAutomationRules(rules);
+      setAutomationRuns(runResult.data as AutomationRun[]);
+      setOverdueTaskCount(taskResult.data.length);
+    }
+    loadAutomations();
   }, [userId]);
 
   useEffect(() => {
@@ -202,6 +240,34 @@ export default function Home() {
     const rows = visibleLeads.map((lead) => [lead.name, lead.email, lead.score, lead.temperature, lead.budget, lead.timeline, lead.source, lead.status]);
     const csv = [header, ...rows].map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(",")).join("\n");
     setExportUrl(`data:text/csv;charset=utf-8,${encodeURIComponent(csv)}`);
+  }
+
+  function isRuleEnabled(ruleKey: AutomationRuleKey) {
+    return automationRules.some((rule) => rule.rule_key === ruleKey && rule.is_enabled);
+  }
+
+  async function logAutomation(ruleKey: AutomationRuleKey, leadId: number | null, description: string) {
+    if (!supabase || !userId) return;
+    const result = await supabase.from("automation_runs").insert({ user_id: userId, lead_id: leadId, rule_key: ruleKey, description }).select("id,lead_id,rule_key,description,created_at").single();
+    if (!result.error) setAutomationRuns((current) => [result.data as AutomationRun, ...current].slice(0, 20));
+  }
+
+  async function createAutomatedTask(lead: Lead, title: string, ruleKey: AutomationRuleKey) {
+    if (!supabase || !userId) return;
+    const due = new Date();
+    due.setDate(due.getDate() + 1);
+    const result = await supabase.from("lead_tasks").insert({ user_id: userId, lead_id: lead.id, title, due_date: due.toISOString().slice(0, 10) });
+    if (result.error) { setAutomationMessage(result.error.message); return; }
+    await logAutomation(ruleKey, lead.id, `${title} created for ${lead.name}.`);
+  }
+
+  async function toggleAutomationRule(rule: AutomationRule) {
+    if (!supabase) return;
+    const result = await supabase.from("automation_rules").update({ is_enabled: !rule.is_enabled }).eq("id", rule.id).select("id,rule_key,name,description,is_enabled").single();
+    if (result.error) { setAutomationMessage(result.error.message); return; }
+    const updated = result.data as AutomationRule;
+    setAutomationRules((current) => current.map((item) => item.id === updated.id ? updated : item));
+    setAutomationMessage(`${updated.name} ${updated.is_enabled ? "enabled" : "paused"}.`);
   }
 
   async function submitAuth(event: FormEvent<HTMLFormElement>) {
@@ -267,6 +333,7 @@ export default function Home() {
     setLeads((current) => [savedLead, ...current]);
     setSelected(savedLead);
     setShowForm(false);
+    if (savedLead.score >= 80 && isRuleEnabled("hot_followup")) await createAutomatedTask(savedLead, "Call new Hot lead", "hot_followup");
   }
 
   async function prepareCsv(event: ChangeEvent<HTMLInputElement>) {
@@ -339,6 +406,9 @@ export default function Home() {
     setImportMessage(`${saved.length} lead${saved.length === 1 ? "" : "s"} imported, scored, and saved.`);
     setCsvLeads([]);
     setCsvFileName("");
+    if (isRuleEnabled("hot_followup")) {
+      for (const lead of saved.filter((item) => item.score >= 80)) await createAutomatedTask(lead, "Call imported Hot lead", "hot_followup");
+    }
   }
 
   async function recordActivity(leadId: number, kind: LeadActivity["kind"], description: string) {
@@ -360,6 +430,7 @@ export default function Home() {
     if (selected?.id === lead.id) setSelected(updatedLead);
     setLeadActionMessage(`Moved to ${pipelineStage}.`);
     await recordActivity(lead.id, "stage_changed", `Pipeline stage changed from ${lead.pipeline_stage} to ${pipelineStage}.`);
+    if (pipelineStage === "Proposal" && isRuleEnabled("stage_followup")) await createAutomatedTask(updatedLead, "Follow up on proposal", "stage_followup");
   }
 
   async function addNote(event: FormEvent<HTMLFormElement>) {
@@ -534,7 +605,7 @@ export default function Home() {
 
         {activeView !== "overview" && activeView !== "leads" && activeView !== "pipeline" && <section className="workspace-panel" aria-live="polite">
           <p className="eyebrow">WORKSPACE VIEW</p><h2>{viewCopy[activeView].title}</h2><p>{viewCopy[activeView].description}</p>
-          {activeView === "automations" && <div className="workspace-grid"><article><strong>Hot lead alert</strong><p>Instant agent notification for scores of 80 or higher.</p><span>Active</span></article><article><strong>Nurture sequence</strong><p>Property recommendations for Warm and Cold prospects.</p><span>Active</span></article></div>}
+          {activeView === "automations" && <div className="automation-center"><div className="automation-stats"><article><strong>{automationRules.filter((rule) => rule.is_enabled).length}</strong><span>Active rules</span></article><article><strong>{automationRuns.length}</strong><span>Recent executions</span></article><article className={overdueTaskCount ? "needs-attention" : ""}><strong>{overdueTaskCount}</strong><span>Overdue tasks</span></article></div>{automationMessage && <div className="crm-message" role="status">{automationMessage}</div>}<div className="automation-layout"><section><div className="automation-heading"><h3>Workflow rules</h3><p>Rules run when leads are created or move through your pipeline.</p></div><div className="automation-rules">{automationRules.map((rule) => <article key={rule.id}><div><span className={`rule-icon ${rule.is_enabled ? "active" : ""}`}>↗</span><div><strong>{rule.name}</strong><p>{rule.description}</p></div></div><label className="rule-switch"><input type="checkbox" checked={rule.is_enabled} onChange={() => toggleAutomationRule(rule)} /><span /><em>{rule.is_enabled ? "Active" : "Paused"}</em></label></article>)}</div></section><section className="automation-log"><div className="automation-heading"><h3>Execution log</h3><p>Latest actions created by your enabled rules.</p></div><div>{automationRuns.map((run) => <article key={run.id}><i /><div><strong>{run.description}</strong><small>{new Date(run.created_at).toLocaleString()}</small></div></article>)}{automationRuns.length === 0 && <p className="automation-empty">No automation has run yet. Add a Hot lead or move a lead to Proposal to test it.</p>}</div></section></div></div>}
           {activeView === "sources" && <div className="workspace-grid">{["Website", "Facebook", "Referral", "Google Ads", "LinkedIn"].map((source) => <article key={source}><strong>{source}</strong><p>{leads.filter((lead) => lead.source === source).length} active lead(s)</p></article>)}</div>}
           {activeView === "analytics" && <div className="workspace-grid"><article><strong>{avgScore}/100</strong><p>Average qualification score</p></article><article><strong>{hotLeads}</strong><p>Leads requiring immediate action</p></article><article><strong>{leads.length ? Math.round((qualified / leads.length) * 100) : 0}%</strong><p>Sales-ready qualification rate</p></article></div>}
           {activeView === "settings" && <div className="workspace-grid"><article><strong>Real-time scoring</strong><p>Enabled for every new lead.</p><span>Enabled</span></article><article><strong>Workspace administrator</strong><p>Muhammad Dawood</p></article></div>}

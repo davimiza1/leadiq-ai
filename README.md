@@ -29,6 +29,9 @@ The demo workspace uses a confirmed Supabase account. Leads added through it are
 - Complete lead editing and deletion
 - Per-lead private notes, follow-up tasks, and activity history
 - Email composer with three personalized templates, demo delivery, and per-lead history
+- Persistent automation rules with enable/pause controls and execution history
+- Automatic next-day tasks for new Hot leads and opportunities entering Proposal
+- Overdue-task monitoring in the automation command center
 - Responsive dashboard layout for desktop and mobile screens
 
 ## Verified interactions
@@ -51,6 +54,9 @@ The demo workspace uses a confirmed Supabase account. Leads added through it are
 | Lead row / arrow | Opens the matching AI lead profile |
 | Email template buttons | Prepare a personalized viewing, property-options, or check-in message |
 | Save demo email | Stores personalized outreach in CRM history without external delivery |
+| Automation rule switch | Enables or pauses the selected workflow persistently |
+| Add a Hot lead | Automatically creates a next-day call task when its rule is active |
+| Move lead to Proposal | Automatically creates a proposal follow-up task when enabled |
 
 ## Scoring model
 
@@ -95,6 +101,8 @@ Then run [`supabase/migrations/202608040001_crm_foundation.sql`](supabase/migrat
 Finally run [`supabase/migrations/202608040002_email_management.sql`](supabase/migrations/202608040002_email_management.sql). It creates owner-protected email history and enables email activity events. For testing without a verified domain, Resend permits `onboarding@resend.dev`; add a verified sender domain before emailing arbitrary recipients.
 
 Run [`supabase/migrations/202608040003_email_demo_mode.sql`](supabase/migrations/202608040003_email_demo_mode.sql) to enable the free demo-delivery status. Without `RESEND_API_KEY`, outreach is saved to CRM history and clearly marked as demo instead of being transmitted externally.
+
+Run [`supabase/migrations/202608040004_automation_engine.sql`](supabase/migrations/202608040004_automation_engine.sql) to add owner-protected automation rules and execution logs.
 
 For a Vercel-compatible production check:
 
